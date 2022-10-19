@@ -4,14 +4,14 @@ const cookie = require('cookie');
 
 const NETLIFY_JWT_EXPIRATION_SECONDS = 14 * 24 * 3600;
 const LOGIN_COOKIE_MAX_AGE = 30 * 60 * 1000;
-const AUTH0_LOGIN_COOKIE_NAME = 'auth0_login_cookie';
+const CROSSID_LOGIN_COOKIE_NAME = 'crossid_login_cookie';
 const NETLIFY_COOKIE_NAME = 'nf_jwt';
 const isRunningLocally = process.env.NETLIFY_DEV === 'true';
 
 const getOpenIDClient = async () => {
-    const issuer = await Issuer.discover(`https://${process.env.AUTH0_DOMAIN}`);
+    const issuer = await Issuer.discover(`https://${process.env.CROSSID_DOMAIN}`);
     return new issuer.Client({
-        client_id: process.env.AUTH0_CLIENT_ID,
+        client_id: process.env.CROSSID_CLIENT_ID,
         redirect_uris: [`${process.env.URL}/.netlify/functions/callback`],
         response_types: ['id_token'],
     });
@@ -30,7 +30,7 @@ const generateNetlifyJWT = async (tokenData) => {
         sub: tokenData.sub,
         app_metadata: {
             authorization: {
-                roles: tokenData[`${process.env.AUTH0_TOKEN_NAMESPACE}/roles`],
+                roles: tokenData.groups,
             },
         },
     };
@@ -42,10 +42,10 @@ const generateNetlifyJWT = async (tokenData) => {
     });
 };
 
-const generateAuth0LoginCookie = (nonce, encodedStateStr) => {
+const generateCrossIdLoginCookie = (nonce, encodedStateStr) => {
     const cookieData = { nonce, state: encodedStateStr };
     return cookie.serialize(
-        AUTH0_LOGIN_COOKIE_NAME,
+        CROSSID_LOGIN_COOKIE_NAME,
         JSON.stringify(cookieData),
         {
             secure: !isRunningLocally,
@@ -62,8 +62,8 @@ const generateEncodedStateString = (route) => {
     return stateBuffer.toString('base64');
 };
 
-const generateAuth0LoginResetCookie = () => {
-    return cookie.serialize(AUTH0_LOGIN_COOKIE_NAME, '', {
+const generateCrossIdLoginResetCookie = () => {
+    return cookie.serialize(CROSSID_LOGIN_COOKIE_NAME, '', {
         secure: !isRunningLocally,
         httpOnly: true,
         path: '/',
@@ -80,7 +80,7 @@ const generateLogoutCookie = () => {
     });
 };
 
-const generateNetlifyCookieFromAuth0Token = async (tokenData) => {
+const generateNetlifyCookieFromCrossIdToken = async (tokenData) => {
     const netlifyToken = await generateNetlifyJWT(tokenData);
     return cookie.serialize(NETLIFY_COOKIE_NAME, netlifyToken, {
         secure: !isRunningLocally,
@@ -89,11 +89,11 @@ const generateNetlifyCookieFromAuth0Token = async (tokenData) => {
     });
 };
 
-const generateAuth0LogoutUrl = () => {
-    const auth0DomainLogout = `https://${process.env.AUTH0_DOMAIN}/v2/logout`;
+const generateCrossIdLogoutUrl = () => {
+    const crossidDomainLogout = `https://${process.env.CROSSID_DOMAIN}/v2/logout`;
     const urlReturnTo = `returnTo=${encodeURIComponent(process.env.URL)}`;
-    const urlClientId = `client_id=${process.env.AUTH0_CLIENT_ID}`;
-    return `${auth0DomainLogout}?${urlReturnTo}&${urlClientId}`;
+    const urlClientId = `client_id=${process.env.CROSSID_CLIENT_ID}`;
+    return `${crossidDomainLogout}?${urlReturnTo}&${urlClientId}`;
 };
 
 const handleLogin = async (event) => {
@@ -117,7 +117,7 @@ const handleLogin = async (event) => {
         headers: {
             Location: authRedirectURL,
             'Cache-Control': 'no-cache',
-            'Set-Cookie': generateAuth0LoginCookie(nonce, state),
+            'Set-Cookie': generateCrossIdLoginCookie(nonce, state),
         },
     };
 };
@@ -129,7 +129,7 @@ const handleCallback = async (event) => {
     const openIDClient = await getOpenIDClient();
 
     const loginCookie = cookie.parse(event.headers.cookie)[
-        AUTH0_LOGIN_COOKIE_NAME
+        CROSSID_LOGIN_COOKIE_NAME
     ];
     const { nonce, state } = JSON.parse(loginCookie);
 
@@ -153,11 +153,11 @@ const handleCallback = async (event) => {
         }
     );
 
-    const netlifyCookie = await generateNetlifyCookieFromAuth0Token(
+    const netlifyCookie = await generateNetlifyCookieFromCrossIdToken(
         tokenSet.claims()
     );
 
-    const auth0LoginCookie = generateAuth0LoginResetCookie();
+    const crossidLoginCookie = generateCrossIdLoginResetCookie();
 
     //Get the redirect URL from the decoded state
     const buff = Buffer.from(state, 'base64');
@@ -169,7 +169,7 @@ const handleCallback = async (event) => {
             'Cache-Control': 'no-cache',
         },
         multiValueHeaders: {
-            'Set-Cookie': [netlifyCookie, auth0LoginCookie],
+            'Set-Cookie': [netlifyCookie, crossidLoginCookie],
         },
     };
 };
@@ -178,7 +178,7 @@ const handleLogout = async () => {
     return {
         statusCode: 302,
         headers: {
-            Location: generateAuth0LogoutUrl(),
+            Location: generateCrossIdLogoutUrl(),
             'Cache-Control': 'no-cache',
             'Set-Cookie': generateLogoutCookie(),
         },
